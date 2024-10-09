@@ -14,6 +14,7 @@ class Reservoir:
         sparsity: float = 0.1,
         tmin: int = 10,
         leaky_rate: float = 0.8,
+        feedback: bool = True,
         seed=None,
     ):
         if seed is not None:
@@ -33,6 +34,7 @@ class Reservoir:
         self.x = np.zeros(reservoir_size)
         self.tmin = tmin
         self.leaky_rate = leaky_rate
+        self.feedback = feedback
 
     def _initialize_reservoir(self, size, range_value, spectral_radius, sparsity):
         valid_matrix = False
@@ -54,12 +56,17 @@ class Reservoir:
         return x
 
     def update(self, u, y_prev):
-        new_x = self._activation(
-            np.dot(self.Win, u) + np.dot(self.W, self.x) + np.dot(self.Wback, y_prev)
-        )
+        if self.feedback:
+            new_x = self._activation(
+                np.dot(self.Win, u)
+                + np.dot(self.W, self.x)
+                + np.dot(self.Wback, y_prev)
+            )
+        else:
+            new_x = self._activation(np.dot(self.Win, u) + np.dot(self.W, self.x))
         self.x = (1 - self.leaky_rate) * self.x + self.leaky_rate * new_x
 
-    def train(self, inputs, outputs, reg=1e-8, noise_bound=0.01):
+    def train(self, inputs, outputs, reg=0.01, noise_bound=0.01):
         states = []
         noise = np.random.uniform(-noise_bound, noise_bound, size=outputs.shape)
         outputs = outputs + noise  # Add noise to outputs
@@ -76,15 +83,18 @@ class Reservoir:
         # Solve for Wout using ridge regression: Wout = Y * X.T * (X * X.T + λI)^-1
         X = states.T
         Y = outputs[self.tmin :].T  # Discard transients from teacher outputs
+
         self.Wout = np.dot(
             Y, np.dot(X.T, np.linalg.pinv(np.dot(X, X.T) + reg * np.eye(X.shape[0])))
         )
 
+        self.last_input = inputs[-1, :]
+
     def predict(self, n_steps=50):
         predictions = []
-        for t in range(n_steps):
-            y_pred = self._output_activation(np.dot(self.Wout, self.x))
+        y_pred = self.last_input
+        for _ in range(n_steps):
             self.update(y_pred, y_pred)
+            y_pred = self._output_activation(np.dot(self.Wout, self.x))
             predictions.append(y_pred)
-            # y_prev = y_pred
         return np.array(predictions)
